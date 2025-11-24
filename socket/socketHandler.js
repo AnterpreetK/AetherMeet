@@ -44,8 +44,6 @@ module.exports = (io) => {
     });
 
     io.on('connection', (socket) => {
-        console.log(`User ${socket.user.username} connected`);
-
         // Join room
         socket.on('joinRoom', async (roomCode) => {
             try {
@@ -106,7 +104,6 @@ module.exports = (io) => {
                 }
 
             } catch (error) {
-                console.error('Join room error:', error);
                 socket.emit('error', { message: 'Failed to join room' });
             }
         });
@@ -140,7 +137,7 @@ module.exports = (io) => {
                         return;
                     }
                     
-                    // Sanitize and validate content using both sanitization methods
+                    // Sanitize and validate content
                     let sanitizedContent = securitySanitize(content);
                     sanitizedContent = sanitizeInput(sanitizedContent);
                     
@@ -152,7 +149,7 @@ module.exports = (io) => {
                     message.content = sanitizedContent;
                 } else {
                     // Media message
-                    if (!mediaUrl) {
+                    if (!mediaUrl || mediaUrl === 'undefined') {
                         socket.emit('error', { message: 'Media URL required for media messages' });
                         return;
                     }
@@ -166,7 +163,9 @@ module.exports = (io) => {
                     }
                     
                     // Set content for display purposes
-                    if (messageType === 'audio') {
+                    if (content && content.trim()) {
+                        message.content = sanitizeInput(content.trim());
+                    } else if (messageType === 'audio') {
                         message.content = `🎵 Audio message (${audioDuration ? Math.round(audioDuration) + 's' : 'Unknown duration'})`;
                     } else if (messageType === 'image') {
                         message.content = `📷 Image: ${mediaName}`;
@@ -193,10 +192,21 @@ module.exports = (io) => {
                 await newMessage.save();
 
                 // Broadcast message to all room members
-                io.to(roomCode).emit('newMessage', newMessage);
+                const messageToSend = {
+                    _id: newMessage._id,
+                    username: newMessage.username,
+                    messageType: newMessage.messageType,
+                    content: newMessage.content,
+                    mediaUrl: newMessage.mediaUrl,
+                    mediaName: newMessage.mediaName,
+                    mediaSize: newMessage.mediaSize,
+                    audioDuration: newMessage.audioDuration,
+                    timestamp: newMessage.timestamp
+                };
+                
+                io.to(roomCode).emit('newMessage', messageToSend);
 
             } catch (error) {
-                console.error('Send message error:', error);
                 socket.emit('error', { message: 'Failed to send message' });
             }
         });
@@ -267,7 +277,6 @@ module.exports = (io) => {
                 });
 
             } catch (error) {
-                console.error('Join request error:', error);
                 socket.emit('joinRequestResult', { 
                     success: false, 
                     message: 'Failed to process request' 
@@ -324,8 +333,55 @@ module.exports = (io) => {
                 await room.save();
 
             } catch (error) {
-                console.error('Approval error:', error);
                 socket.emit('error', { message: 'Failed to process approval' });
+            }
+        });
+
+        // Handle removing a user (owner only)
+        socket.on('removeUser', async (data) => {
+            try {
+                const { username } = data;
+                const roomCode = socket.currentRoom;
+
+                const room = await Room.findOne({ roomCode, isActive: true });
+                if (!room || room.owner !== socket.user.username) {
+                    socket.emit('error', { message: 'Only the owner can remove users' });
+                    return;
+                }
+
+                // Cannot remove the owner
+                if (username === room.owner) {
+                    socket.emit('error', { message: 'Cannot remove the owner' });
+                    return;
+                }
+
+                // Check if user is a member
+                const memberExists = isRoomMember(room, username);
+                if (!memberExists) {
+                    socket.emit('error', { message: 'User is not a member of this room' });
+                    return;
+                }
+
+                // Remove the user
+                room.removeMember(username);
+                await room.save();
+
+                // Notify all room members about the removal
+                io.to(roomCode).emit('userRemoved', {
+                    username: username,
+                    removedBy: socket.user.username,
+                    memberCount: room.members.length
+                });
+
+                // Notify the removed user specifically
+                io.emit('removedFromRoom', {
+                    roomCode: roomCode,
+                    username: username,
+                    removedBy: socket.user.username
+                });
+
+            } catch (error) {
+                socket.emit('error', { message: 'Failed to send message' });
             }
         });
 
@@ -408,7 +464,6 @@ module.exports = (io) => {
                 }
 
             } catch (error) {
-                console.error('Vote error:', error);
                 socket.emit('error', { message: 'Failed to cast vote' });
             }
         });
@@ -485,9 +540,6 @@ module.exports = (io) => {
                             room.destroyedAt = new Date();
                             await room.save();
 
-                            console.log(`🗑️  Room ${roomCode} auto-destroyed: ${room.isDemoRoom ? 'Demo room' : 'Empty room'} - last member left`);
-                            console.log(`📊 Room stats: ${room.members.length} members, created: ${room.createdAt}`);
-
                             io.to(roomCode).emit('roomDestroyed', {
                                 reason: room.isDemoRoom ? 'Demo room ended - last member left' : 'Last member left the room'
                             });
@@ -495,16 +547,12 @@ module.exports = (io) => {
                             // Authenticated rooms stay active even when empty
                             await room.save();
                             
-                            console.log(`⚠️  Room ${roomCode} is now empty but remains active (authenticated room)`);
-                            
                             io.to(roomCode).emit('roomEmpty', {
                                 message: 'Room is now empty but remains active'
                             });
                         }
                     } else {
                         await room.save();
-                        
-                        console.log(`👋 User ${username} left room ${roomCode} (${room.members.length} members remaining)`);
                         
                         // Notify remaining members
                         socket.to(roomCode).emit('userLeft', {
@@ -518,14 +566,12 @@ module.exports = (io) => {
                 }
 
             } catch (error) {
-                console.error('Leave room error:', error);
                 socket.emit('error', { message: 'Failed to leave room' });
             }
         });
 
         // Handle disconnect
         socket.on('disconnect', () => {
-            console.log(`User ${socket.user.username} disconnected`);
             // Note: We don't automatically remove from room on disconnect
             // Users might reconnect and want to stay in the room
         });

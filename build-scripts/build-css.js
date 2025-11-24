@@ -9,7 +9,7 @@ const fs = require("fs");
 const path = require("path");
 const { execSync } = require("child_process");
 
-const inputFile = "./client/src/styles/index.css";
+const inputFile = "./public/css/style.css";
 const outputFile = "./public/css/compiled.css";
 
 console.log("📦 Building CSS with Tailwind...");

@@ -1,5 +1,4 @@
 const jwt = require('jsonwebtoken');
-const googleDictionary = require('google-dictionary-api');
 const User = require('../models/User');
 
 // JWT Authentication middleware

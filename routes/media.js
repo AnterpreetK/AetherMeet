@@ -211,12 +211,19 @@ router.get('/file/:filename', (req, res) => {
             '.mp3': 'audio/mpeg',
             '.wav': 'audio/wav',
             '.pdf': 'application/pdf',
-            '.txt': 'text/plain'
+            '.txt': 'text/plain',
+            '.doc': 'application/msword',
+            '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
         };
 
         const contentType = mimeTypes[ext] || 'application/octet-stream';
+        
+        // CORS headers for cross-origin access
+        res.setHeader('Access-Control-Allow-Origin', '*');
+        res.setHeader('Access-Control-Allow-Methods', 'GET');
         res.setHeader('Content-Type', contentType);
         res.setHeader('Cache-Control', 'public, max-age=3600'); // 1 hour cache
+        res.setHeader('Content-Disposition', `inline; filename="${filename}"`);
         
         res.sendFile(filepath);
 
@@ -225,6 +232,34 @@ router.get('/file/:filename', (req, res) => {
         res.status(500).json({
             success: false,
             message: 'Failed to serve file'
+        });
+    }
+});
+
+// Download media file (force download instead of inline display)
+router.get('/download/:filename', (req, res) => {
+    try {
+        const filename = req.params.filename;
+        const filepath = path.join(__dirname, '../storage/media', filename);
+        
+        if (!fs.existsSync(filepath)) {
+            return res.status(404).json({
+                success: false,
+                message: 'File not found'
+            });
+        }
+
+        // Force download with attachment disposition
+        res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+        res.setHeader('Access-Control-Allow-Origin', '*');
+        
+        res.sendFile(filepath);
+
+    } catch (error) {
+        console.error('File download error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to download file'
         });
     }
 });

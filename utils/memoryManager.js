@@ -48,9 +48,8 @@ class MemoryManager {
      * Perform comprehensive cleanup
      */
     async performCleanup() {
-        console.log('🧹 Starting memory cleanup process...');
         const startTime = Date.now();
-        
+
         try {
             // 1. Clean expired demo rooms
             await this.cleanExpiredDemoRooms();

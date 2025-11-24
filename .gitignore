@@ -44,6 +44,10 @@ logs
 tmp/
 temp/
 
+# Deployment artifacts
+ecosystem.config.js
+*.service
+
 # IDE files
 .vscode/
 .idea/
@@ -65,3 +69,9 @@ temp/
 
 # MongoDB data (if running locally)
 data/
+
+# Storage (user uploaded files)
+storage/media/*
+storage/pdfs/*
+!storage/media/.gitkeep
+!storage/pdfs/.gitkeep

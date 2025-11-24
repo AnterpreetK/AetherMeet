@@ -594,6 +594,45 @@ router.get('/:roomCode/export', async (req, res) => {
     }
 });
 
+// Get pending admissions for a room
+router.get('/:roomCode/pending', authenticateToken, async (req, res) => {
+    try {
+        const { roomCode } = req.params;
+        const currentUser = req.user.username;
+
+        const room = await Room.findOne({ roomCode, isActive: true });
+        if (!room) {
+            return res.status(404).json({
+                success: false,
+                message: 'Room not found'
+            });
+        }
+
+        // Check if user is owner or member
+        const isOwner = room.owner === currentUser;
+        const isMember = room.members.find(member => member.username === currentUser);
+        
+        if (!isOwner && !isMember) {
+            return res.status(403).json({
+                success: false,
+                message: 'Not authorized'
+            });
+        }
+
+        res.json({
+            success: true,
+            pending: room.pendingMembers || []
+        });
+
+    } catch (error) {
+        console.error('Get pending admissions error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to get pending admissions'
+        });
+    }
+});
+
 // Approve or deny admission request
 router.post('/:roomCode/admission/:username', authenticateToken, async (req, res) => {
     try {

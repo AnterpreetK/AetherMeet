@@ -122,6 +122,11 @@ socket.on('roomJoined', (roomInfo) => {
     } else {
         leaveRoomBtn.textContent = 'Leave Room';
     }
+    
+    // Fetch and display pending admissions immediately on room join
+    if (isOwner || roomInfo.admissionType === 'democratic_voting') {
+        fetchPendingAdmissions();
+    }
 });
 
 socket.on('messageHistory', (messages) => {
@@ -143,8 +148,12 @@ socket.on('userJoined', (data) => {
     
     // Update members list if we have room info
     if (currentRoom) {
-        currentRoom.members.push({ username: data.username, joinedAt: new Date() });
-        updateMembersList(currentRoom.members);
+        // Check if user already exists to prevent duplicates
+        const existingMember = currentRoom.members.find(m => m.username === data.username);
+        if (!existingMember) {
+            currentRoom.members.push({ username: data.username, joinedAt: new Date() });
+            updateMembersList(currentRoom.members);
+        }
     }
 });
 
@@ -186,16 +195,30 @@ socket.on('userAdmitted', (data) => {
     displaySystemMessage(`${data.username} was admitted to the room`);
     memberCount.textContent = `Members: ${data.memberCount}`;
     
-    // Update members list
+    // Add the admitted user to local members list
     if (currentRoom) {
-        currentRoom.members.push({ username: data.username, joinedAt: new Date() });
-        updateMembersList(currentRoom.members);
+        // Check if user already exists to prevent duplicates
+        const existingMember = currentRoom.members.find(m => m.username === data.username);
+        if (!existingMember) {
+            currentRoom.members.push({ username: data.username, joinedAt: new Date() });
+            updateMembersList(currentRoom.members);
+        }
     }
+    
+    // Refresh pending admissions to remove the admitted user
+    setTimeout(() => {
+        fetchPendingAdmissions();
+    }, 100);
 });
 
 socket.on('admissionRequired', (data) => {
+    // Show notification and update pending list in real-time
     if (isOwner || currentRoom.admissionType === 'democratic_voting') {
-        showAdmissionRequest(data);
+        showAdmissionNotification(data);
+        // Immediately fetch the updated pending list to show the new request
+        setTimeout(() => {
+            fetchPendingAdmissions();
+        }, 100);
     }
 });
 
@@ -205,6 +228,10 @@ socket.on('pendingAdmissions', (pending) => {
 
 socket.on('voteUpdate', (data) => {
     displaySystemMessage(`Vote update for ${data.username}: ${data.voteResult.admit} admit, ${data.voteResult.deny} deny (${data.requiredVotes} required)`);
+    // Immediately refresh pending list to show updated vote counts
+    setTimeout(() => {
+        fetchPendingAdmissions();
+    }, 100);
 });
 
 socket.on('ownerTransfer', (data) => {
@@ -384,7 +411,7 @@ function showNotification(message) {
 function sendMessage(content, type = 'text', mediaData = null) {
     const messageData = {
         content: content.trim(),
-        type,
+        messageType: type,
         timestamp: new Date()
     };
 
@@ -452,12 +479,11 @@ function uploadFile(file, messageType) {
     .then(data => {
         if (data.success) {
             const mediaData = {
-                url: data.mediaUrl,
-                name: data.mediaName,
-                size: data.mediaSize
+                url: data.media.url,
+                name: data.media.originalName,
+                size: data.media.size
             };
 
-            // Send message with media
             const messageContent = file.name;
             sendMessage(messageContent, messageType, mediaData);
             
@@ -472,7 +498,6 @@ function uploadFile(file, messageType) {
         }
     })
     .catch(error => {
-        console.error('Upload error:', error);
         showError('Failed to upload file: ' + error.message);
         uploadStatus.textContent = 'Upload failed';
         uploadBar.style.width = '0%';
@@ -526,8 +551,7 @@ async function startAudioRecording() {
         recordingInterval = setInterval(updateRecordingTime, 1000);
         
     } catch (error) {
-        console.error('Error starting recording:', error);
-        showError('Failed to start recording. Please check microphone permissions.');
+        showError('Failed to start recording. Please check microphone permissions');
     }
 }
 
@@ -571,20 +595,27 @@ function uploadAudioFile(audioFile, duration) {
     uploadStatus.textContent = 'Uploading audio...';
     uploadBar.style.width = '0%';
 
+    // Build headers - only include Authorization for non-demo users
+    const headers = {};
+    if (!isDemoRoom) {
+        const token = localStorage.getItem('token');
+        if (token) {
+            headers['Authorization'] = `Bearer ${token}`;
+        }
+    }
+
     fetch('/api/media/upload', {
         method: 'POST',
-        headers: {
-            'Authorization': `Bearer ${localStorage.getItem('token')}`
-        },
+        headers: headers,
         body: formData
     })
     .then(response => response.json())
     .then(data => {
         if (data.success) {
             const mediaData = {
-                url: data.mediaUrl,
-                name: data.mediaName,
-                size: data.mediaSize,
+                url: data.media.url,
+                name: data.media.originalName,
+                size: data.media.size,
                 duration: duration
             };
 
@@ -601,7 +632,6 @@ function uploadAudioFile(audioFile, duration) {
         }
     })
     .catch(error => {
-        console.error('Audio upload error:', error);
         showError('Failed to upload audio: ' + error.message);
         uploadStatus.textContent = 'Upload failed';
         uploadBar.style.width = '0%';
@@ -622,8 +652,9 @@ function formatFileSize(bytes) {
 }
 
 function formatDuration(seconds) {
+    if (!seconds || isNaN(seconds)) return '0:00';
     const mins = Math.floor(seconds / 60);
-    const secs = seconds % 60;
+    const secs = Math.floor(seconds % 60);
     return `${mins}:${secs.toString().padStart(2, '0')}`;
 }
 
@@ -673,8 +704,7 @@ async function downloadPdf() {
             showError(`Failed to export PDF: ${data.message}`);
         }
     } catch (error) {
-        console.error('PDF export error:', error);
-        showError('Failed to export PDF. Please try again.');
+        showError('Failed to export PDF. Please try again');
     }
 }
 
@@ -713,15 +743,12 @@ async function savePdfToNotes() {
             }
         } else {
             const data = await response.json();
-            showError(`Failed to export PDF: ${data.message}`);
+                showError(`Failed to export PDF: ${data.message}`);
         }
     } catch (error) {
-        console.error('PDF save to notes error:', error);
-        showError('Failed to prepare PDF for notes. Please try again.');
+        showError('Failed to prepare PDF for notes. Please try again');
     }
-}
-
-// Leave room
+}// Leave room
 leaveRoomBtn.addEventListener('click', () => {
     if (isDemoRoom) {
         // Demo rooms: simple confirmation
@@ -783,7 +810,12 @@ document.addEventListener('click', (e) => {
 // Helper functions
 function displayMessage(message) {
     const messageDiv = document.createElement('div');
-    messageDiv.className = `p-3 mb-2 border-2 border-black ${message.username === user.username ? 'bg-gray-200 ml-8' : 'bg-white mr-8'}`;
+    
+    // Get current user for comparison
+    const currentUser = isDemoRoom ? JSON.parse(localStorage.getItem('demoUser') || '{}') : user;
+    const isOwnMessage = message.username === currentUser.username;
+    
+    messageDiv.className = `p-3 mb-2 border-2 border-black ${isOwnMessage ? 'bg-gray-200 ml-8' : 'bg-white mr-8'}`;
     messageDiv.style.boxShadow = '2px 2px 0px 0px #000000';
     
     const timestamp = new Date(message.timestamp).toLocaleTimeString();
@@ -793,7 +825,17 @@ function displayMessage(message) {
     // Use messageType field from the message object
     const messageType = message.messageType || message.type || 'text';
     
-    if (messageType === 'text') {
+    // If it's supposed to be a media message but has no mediaUrl, treat as text
+    if ((messageType !== 'text') && !message.mediaUrl) {
+        messageContent = `
+            <div class="flex justify-between items-center mb-1">
+                <span class="font-bold text-sm uppercase tracking-wide">${message.username}</span>
+                <span class="text-xs font-mono text-gray-600">${timestamp}</span>
+            </div>
+            <div class="font-mono text-sm">${escapeHtml(message.content)}</div>
+            <div class="text-xs text-red-500 mt-1">⚠️ Media file not available</div>
+        `;
+    } else if (messageType === 'text') {
         messageContent = `
             <div class="flex justify-between items-center mb-1">
                 <span class="font-bold text-sm uppercase tracking-wide">${message.username}</span>
@@ -809,18 +851,32 @@ function displayMessage(message) {
             </div>
             <div class="font-mono text-sm mb-2">${escapeHtml(message.content)}</div>
             <img src="${message.mediaUrl}" alt="${message.mediaName}" 
-                 class="max-w-full h-auto border-2 border-black cursor-pointer hover:border-gray-600"
-                 onclick="window.open('${message.mediaUrl}', '_blank')"
+                 class="max-w-full h-auto border-2 border-black cursor-pointer hover:border-gray-600 media-view"
+                 data-url="${message.mediaUrl}"
                  style="box-shadow: 2px 2px 0px 0px #000000;">
-            <div class="font-mono text-xs text-gray-500 mt-1">${message.mediaName} (${formatFileSize(message.mediaSize)})</div>
+            <div class="flex justify-between items-center mt-1">
+                <div class="font-mono text-xs text-gray-500">${message.mediaName} (${formatFileSize(message.mediaSize)})</div>
+                <button class="download-btn px-2 py-1 bg-blue-500 hover:bg-blue-600 text-white text-xs font-bold border border-black"
+                        data-url="${message.mediaUrl}"
+                        data-filename="${message.mediaName}"
+                        style="box-shadow: 1px 1px 0px 0px #000000;"
+                        title="Download image">
+                    💾 Download
+                </button>
+            </div>
         `;
     } else if (messageType === 'audio') {
+        const audioContent = message.content || '🎙️ Audio message';
+        const audioName = message.mediaName || 'audio.webm';
+        const audioSize = message.mediaSize || 0;
+        const audioDur = message.audioDuration || 0;
+        
         messageContent = `
             <div class="flex justify-between items-center mb-1">
                 <span class="font-bold text-sm uppercase tracking-wide">${message.username}</span>
                 <span class="text-xs font-mono text-gray-600">${timestamp}</span>
             </div>
-            <div class="font-mono text-sm mb-2">${escapeHtml(message.content)}</div>
+            <div class="font-mono text-sm mb-2">${escapeHtml(audioContent)}</div>
             <div class="bg-gray-100 border-2 border-black p-2" style="box-shadow: 1px 1px 0px 0px #000000;">
                 <audio controls class="w-full">
                     <source src="${message.mediaUrl}" type="audio/webm">
@@ -828,8 +884,17 @@ function displayMessage(message) {
                     <source src="${message.mediaUrl}" type="audio/wav">
                     Your browser does not support audio playback.
                 </audio>
-                <div class="font-mono text-xs text-gray-500 mt-1">
-                    ${message.mediaName} • Duration: ${formatDuration(message.audioDuration)} • ${formatFileSize(message.mediaSize)}
+                <div class="flex justify-between items-center mt-2">
+                    <div class="font-mono text-xs text-gray-500">
+                        ${audioName} • Duration: ${formatDuration(audioDur)} • ${formatFileSize(audioSize)}
+                    </div>
+                    <button class="download-btn px-2 py-1 bg-blue-500 hover:bg-blue-600 text-white text-xs font-bold border border-black"
+                            data-url="${message.mediaUrl}"
+                            data-filename="${audioName}"
+                            style="box-shadow: 1px 1px 0px 0px #000000;"
+                            title="Download audio file">
+                        💾 Download
+                    </button>
                 </div>
             </div>
         `;
@@ -845,20 +910,51 @@ function displayMessage(message) {
                 <source src="${message.mediaUrl}" type="video/webm">
                 Your browser does not support video playback.
             </video>
-            <div class="font-mono text-xs text-gray-500 mt-1">${message.mediaName} (${formatFileSize(message.mediaSize)})</div>
+            <div class="flex justify-between items-center mt-1">
+                <div class="font-mono text-xs text-gray-500">${message.mediaName} (${formatFileSize(message.mediaSize)})</div>
+                <button class="download-btn px-2 py-1 bg-blue-500 hover:bg-blue-600 text-white text-xs font-bold border border-black"
+                        data-url="${message.mediaUrl}"
+                        data-filename="${message.mediaName}"
+                        style="box-shadow: 1px 1px 0px 0px #000000;"
+                        title="Download video">
+                    💾 Download
+                </button>
+            </div>
         `;
     } else if (messageType === 'file') {
+        const fileName = message.mediaName || 'file';
+        const fileSize = message.mediaSize || 0;
+        const fileContent = message.content || `📎 ${fileName}`;
+        
         messageContent = `
             <div class="flex justify-between items-center mb-1">
                 <span class="font-bold text-sm uppercase tracking-wide">${message.username}</span>
                 <span class="text-xs font-mono text-gray-600">${timestamp}</span>
             </div>
-            <div class="font-mono text-sm mb-2">${escapeHtml(message.content)}</div>
-            <div class="bg-gray-100 border-2 border-black p-2 hover:bg-gray-200 cursor-pointer"
-                 style="box-shadow: 1px 1px 0px 0px #000000;"
-                 onclick="window.open('${message.mediaUrl}', '_blank')">
-                <div class="font-bold">📎 ${message.mediaName}</div>
-                <div class="font-mono text-xs text-gray-500">${formatFileSize(message.mediaSize)}</div>
+            <div class="font-mono text-sm mb-2">${escapeHtml(fileContent)}</div>
+            <div class="bg-gray-100 border-2 border-black p-3 hover:bg-gray-200"
+                 style="box-shadow: 1px 1px 0px 0px #000000;">
+                <div class="flex justify-between items-center">
+                    <div>
+                        <div class="font-bold text-sm">📎 ${fileName}</div>
+                        <div class="font-mono text-xs text-gray-500">${formatFileSize(fileSize)}</div>
+                    </div>
+                    <div class="flex gap-2">
+                        <button class="view-btn px-3 py-1 bg-green-500 hover:bg-green-600 text-white text-xs font-bold border border-black"
+                                data-url="${message.mediaUrl}"
+                                style="box-shadow: 1px 1px 0px 0px #000000;"
+                                title="Open file in new tab">
+                            👁️ View
+                        </button>
+                        <button class="download-btn px-3 py-1 bg-blue-500 hover:bg-blue-600 text-white text-xs font-bold border border-black"
+                                data-url="${message.mediaUrl}"
+                                data-filename="${fileName}"
+                                style="box-shadow: 1px 1px 0px 0px #000000;"
+                                title="Download file">
+                            💾 Save
+                        </button>
+                    </div>
+                </div>
             </div>
         `;
     }
@@ -897,9 +993,9 @@ function updateMembersList(members) {
                     ${isOwner ? '<span class="text-yellow-600 ml-2">👑</span>' : ''}
                 </div>
                 ${canRemove ? `
-                    <button onclick="removeUser('${member.username}')" 
-                            class="px-2 py-1 bg-red-500 text-white text-xs font-bold border border-black hover:bg-red-600"
+                    <button class="remove-user-btn px-2 py-1 bg-red-500 text-white text-xs font-bold border border-black hover:bg-red-600"
                             style="box-shadow: 1px 1px 0px 0px #000000;"
+                            data-username="${member.username}"
                             title="Remove user from room">
                         ✕
                     </button>
@@ -908,6 +1004,16 @@ function updateMembersList(members) {
         `;
         
         membersList.appendChild(memberDiv);
+    });
+    
+    // Attach event listeners to remove buttons
+    document.querySelectorAll('.remove-user-btn').forEach(btn => {
+        btn.addEventListener('click', function(e) {
+            e.preventDefault();
+            e.stopPropagation();
+            const username = this.getAttribute('data-username');
+            removeUser(username);
+        });
     });
 }
 
@@ -939,17 +1045,57 @@ function updatePendingAdmissions(pending) {
         
         pendingList.appendChild(pendingDiv);
     });
+    
+    // Add event listeners to the buttons
+    attachAdmissionButtonListeners();
+}
+
+// Add event listeners to admission buttons
+function attachAdmissionButtonListeners() {
+    // Owner approval buttons
+    document.querySelectorAll('.admit-btn').forEach(btn => {
+        btn.addEventListener('click', function() {
+            const username = this.getAttribute('data-username');
+            const action = this.getAttribute('data-action');
+            approveAdmission(username, action);
+        });
+    });
+    
+    document.querySelectorAll('.deny-btn').forEach(btn => {
+        btn.addEventListener('click', function() {
+            const username = this.getAttribute('data-username');
+            const action = this.getAttribute('data-action');
+            approveAdmission(username, action);
+        });
+    });
+    
+    // Democratic voting buttons
+    document.querySelectorAll('.vote-admit-btn').forEach(btn => {
+        btn.addEventListener('click', function() {
+            const username = this.getAttribute('data-username');
+            const action = this.getAttribute('data-action');
+            castVote(username, action);
+        });
+    });
+    
+    document.querySelectorAll('.vote-deny-btn').forEach(btn => {
+        btn.addEventListener('click', function() {
+            const username = this.getAttribute('data-username');
+            const action = this.getAttribute('data-action');
+            castVote(username, action);
+        });
+    });
 }
 
 function getAdmissionActions(member) {
     if (currentRoom.admissionType === 'owner_approval' && isOwner) {
         return `
-            <button class="bg-green-500 hover:bg-green-600 text-white px-3 py-1 border-2 border-black font-bold text-sm uppercase tracking-wide mr-2" 
+            <button class="admit-btn bg-green-500 hover:bg-green-600 text-white px-3 py-1 border-2 border-black font-bold text-sm uppercase tracking-wide mr-2" 
                     style="box-shadow: 1px 1px 0px 0px #000000;" 
-                    onclick="approveAdmission('${member.username}', 'admit')">Admit</button>
-            <button class="bg-red-500 hover:bg-red-600 text-white px-3 py-1 border-2 border-black font-bold text-sm uppercase tracking-wide" 
+                    data-username="${member.username}" data-action="admit">Admit</button>
+            <button class="deny-btn bg-red-500 hover:bg-red-600 text-white px-3 py-1 border-2 border-black font-bold text-sm uppercase tracking-wide" 
                     style="box-shadow: 1px 1px 0px 0px #000000;" 
-                    onclick="approveAdmission('${member.username}', 'deny')">Deny</button>
+                    data-username="${member.username}" data-action="deny">Deny</button>
         `;
     } else if (currentRoom.admissionType === 'democratic_voting') {
         const hasVoted = member.votes && member.votes.some(vote => vote.voter === user.username);
@@ -957,12 +1103,12 @@ function getAdmissionActions(member) {
             return '<div class="text-xs font-mono text-gray-600">You have voted</div>';
         }
         return `
-            <button class="bg-green-500 hover:bg-green-600 text-white px-3 py-1 border-2 border-black font-bold text-sm uppercase tracking-wide mr-2" 
+            <button class="vote-admit-btn bg-green-500 hover:bg-green-600 text-white px-3 py-1 border-2 border-black font-bold text-sm uppercase tracking-wide mr-2" 
                     style="box-shadow: 1px 1px 0px 0px #000000;" 
-                    onclick="castVote('${member.username}', 'admit')">Vote Admit</button>
-            <button class="bg-red-500 hover:bg-red-600 text-white px-3 py-1 border-2 border-black font-bold text-sm uppercase tracking-wide" 
+                    data-username="${member.username}" data-action="admit">Vote Admit</button>
+            <button class="vote-deny-btn bg-red-500 hover:bg-red-600 text-white px-3 py-1 border-2 border-black font-bold text-sm uppercase tracking-wide" 
                     style="box-shadow: 1px 1px 0px 0px #000000;" 
-                    onclick="castVote('${member.username}', 'deny')">Vote Deny</button>
+                    data-username="${member.username}" data-action="deny">Vote Deny</button>
         `;
     }
     return '';
@@ -982,89 +1128,69 @@ function showAdmissionRequest(data) {
     openModal(admissionModal);
 }
 
-// Global functions for admission actions
-window.approveAdmission = async function(username, decision) {
-    try {
-        const response = await fetch(`/api/rooms/${roomCode}/admission/${username}`, {
-            method: 'POST',
-            headers: {
-                'Authorization': `Bearer ${token}`,
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({ decision })
-        });
+// Show admission notification without opening modal
+function showAdmissionNotification(data) {
+    displaySystemMessage(`${data.username} is requesting to join the room`);
+    // Play notification sound if available
+    playNotificationSound();
+}
 
-        const data = await response.json();
-        
-        if (data.success) {
-            displaySystemMessage(data.message);
-            if (data.voteResult) {
-                displaySystemMessage(`Vote count: ${data.voteResult.admit} admit, ${data.voteResult.deny} deny`);
+// Fetch pending admissions from server to refresh the list
+async function fetchPendingAdmissions() {
+    if (!isDemoRoom && token && currentRoom) {
+        try {
+            const response = await fetch(`/api/rooms/${currentRoom.roomCode}/pending`, {
+                method: 'GET',
+                headers: {
+                    'Authorization': `Bearer ${token}`,
+                    'Content-Type': 'application/json'
+                }
+            });
+            const data = await response.json();
+            if (data.success && data.pending) {
+                updatePendingAdmissions(data.pending);
             }
-        } else {
-            displaySystemMessage(`Error: ${data.message}`);
+        } catch (error) {
+            // Silent fail for pending admissions fetch
         }
-    } catch (error) {
-        console.error('Admission decision error:', error);
-        displaySystemMessage('Failed to process admission decision');
     }
+}
+
+// Play notification sound
+function playNotificationSound() {
+    try {
+        const audio = new Audio('data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQoGAACBhYqFbF1fdJivrJBhNjVgodDbq2EcBj+a2/LDciUFLIHO8tiJNwgZaLvt559NEAxQp+PwtmMcBjiR1/LMeSwFJHfH8N2QQAoUXrTp66hVFApGn+DyvmwhBSuBzvLZiTYIG2m98OScTgwOUKzn7bReFQU7k9nywHYpBSl+zPLaizsIHGS57OihUBELTKXh8bRgHQU+mt7yvHEoCCN7yvHajTsJHmW87OWhTxELTaXi8bRgGwU+m9/zvHAoBCN7yvLajzwJH2W98OSgTxEKTaXi8rNgGgU9m97zu3AoBCR8yvHajjsJH2e98eWgUBELTqfj87NhGgU9nN/zvm8pBCR8y/HajDsJH2e98eWfUBELTqfj87RhGwU9nN/zvnApBSR8y/HajDwJH2i+8eWfTxELTqfj8rRiGwU+nd/zvm8pBSR9y/HajDwKIGi+8OWfTxEMT6fj8rRiGwU+nd/zv28qBSR9y/HajDwKIGm+8OWfTxEMT6fj8rRiGwU+nt/zv3AqBSR9y/HajDwKIGq+8OWfTxEMUKfj8rNiGwU+nt/zv3AqBSV9y/HajDwKIWq+8OWfTxEMUKfj8rNiGwU/nt/zwHAqBSV9y/HajDwKIWq+8OWfThEMUKfj8rNiGwU/nt/zwHAqBSV+y/HajDwKIWq+8OWfThEMUKfj8rNjGwVAnt/zwHAqBSV+y/HajDwKIWq+8OWfThEMUKjj8rNjGwVAn9/zwHEqBSV+y/HajDwKIWq+8OWfThEMUKjj8rNjGwVAn9/zwHEqBSV+y/HajDwKIWu+8OWfThEMUKjj8rNjGwVAn9/zwHEqBSZ+y/HajDwKIWu+8OWeTREMUKjj8rNkGwVAn9/zwHEqBSZ+y/HajDwKIWu+8OWeTREMUKjj8rNkGwVAn9/zwHEqBSZ+y/HajDwKIWu+8OWeTREMUKjj8rNkGwVAn9/zwHEqBSZ+y/HajDwKIWu+8OWeTREMUKjj8rNkGwVAn9/zwHEqBSZ+y/HajDwKIWu+8OWeTREMUKjj8rNkGwVAn9/zwHEqBSZ+y/HajDwKIWu+8OWeTREMUKjj8rNkGwVAn9/zwHEqBSZ/y/HajDwKIWu+8OWeTREMUKjj8rNkGwVAoN/zwHEqBSZ/y/HajDwKIWu+8OWeTREMUKjj8rNkGwVAoN/zwHEqBSZ/y/HajDwKIWy+8OWeTREMUKjj8rNkGwVAoN/zwHEqBSZ/y/HajDwKIWy+8OWeTREMUKjj8rNkGwVAoN/zwHEqBSZ/y/HajDwKIWy+8OWeTREMUKjj8rNkGwVAoN/zwHEqBSZ/y/HajDwKIWy+8OWeTREMUKjj8rNkGwVAoN/zwHEqBSZ/y/HajDwKIWy+8OWeTREMUKjj8rNkGwVAoN/zwHEqBSZ/y/HajDwKIWy+8OWeTREMUKjj8rNkGwVAoN/zwHEqBSZ/y/HajDwKIWy+8OWeTREMUKjj8rNkGwVAoN/zwHEqBSZ/y/HajDwKIWy+8OWeTREMUKjj8Q==');
+        audio.play().catch(() => {});
+    } catch (error) {
+        // Silent fail
+    }
+}
+
+// Global functions for admission actions
+window.approveAdmission = function(username, decision) {
+    socket.emit('approveAdmission', { username, decision });
     closeModal(admissionModal);
+    setTimeout(() => {
+        fetchPendingAdmissions();
+    }, 200);
 };
 
 // Remove user from room (owner only)
-window.removeUser = async function(username) {
+function removeUser(username) {
     if (!confirm(`Are you sure you want to remove ${username} from the room?`)) {
         return;
     }
     
-    try {
-        const response = await fetch(`/api/rooms/${roomCode}/members/${username}`, {
-            method: 'DELETE',
-            headers: {
-                'Authorization': `Bearer ${token}`,
-                'Content-Type': 'application/json'
-            }
-        });
+    socket.emit('removeUser', { username });
+    displaySystemMessage(`Removing ${username} from the room...`);
+}
 
-        const data = await response.json();
-        
-        if (data.success) {
-            displaySystemMessage(data.message);
-        } else {
-            displaySystemMessage(`Error: ${data.message}`);
-        }
-    } catch (error) {
-        console.error('Remove user error:', error);
-        displaySystemMessage('Failed to remove user from room');
-    }
-};
-
-window.castVote = async function(username, decision) {
-    try {
-        const response = await fetch(`/api/rooms/${roomCode}/admission/${username}`, {
-            method: 'POST',
-            headers: {
-                'Authorization': `Bearer ${token}`,
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({ decision })
-        });
-
-        const data = await response.json();
-        
-        if (data.success) {
-            displaySystemMessage(data.message);
-            if (data.voteResult) {
-                displaySystemMessage(`Vote count: ${data.voteResult.admit} admit, ${data.voteResult.deny} deny (${data.voteResult.required} required)`);
-            }
-        } else {
-            displaySystemMessage(`Error: ${data.message}`);
-        }
-    } catch (error) {
-        console.error('Vote error:', error);
-        displaySystemMessage('Failed to cast vote');
-    }
+window.castVote = function(username, decision) {
+    socket.emit('castVote', { username, decision });
     closeModal(admissionModal);
+    setTimeout(() => {
+        fetchPendingAdmissions();
+    }, 200);
 };
 
 function scrollToBottom() {
@@ -1076,6 +1202,34 @@ function escapeHtml(text) {
     div.textContent = text;
     return div.innerHTML;
 }
+
+// Download file function
+window.downloadFile = function(url, filename) {
+    try {
+        // Convert view URL to download URL
+        const downloadUrl = url.replace('/api/media/file/', '/api/media/download/');
+        
+        // Create a temporary anchor element
+        const a = document.createElement('a');
+        a.href = downloadUrl;
+        a.download = filename || 'download';
+        a.target = '_blank';
+        a.style.display = 'none';
+        
+        // Append to body, click, and remove
+        document.body.appendChild(a);
+        a.click();
+        
+        // Clean up
+        setTimeout(() => {
+            document.body.removeChild(a);
+            showNotification(`💾 Downloading ${filename}...`);
+        }, 100);
+    } catch (error) {
+        console.error('Download error:', error);
+        showError('Failed to download file');
+    }
+};
 
 function showError(message) {
     // Create error notification
@@ -1098,3 +1252,39 @@ function showError(message) {
 window.addEventListener('beforeunload', () => {
     socket.disconnect();
 });
+
+// Event delegation for dynamically created buttons (CSP compliant)
+if (chatMessages) {
+    chatMessages.addEventListener('click', function(e) {
+        // Handle download buttons
+        const downloadBtn = e.target.closest('.download-btn');
+        if (downloadBtn) {
+            const url = downloadBtn.dataset.url;
+            const filename = downloadBtn.dataset.filename;
+            if (url && filename) {
+                downloadFile(url, filename);
+            }
+            return;
+        }
+        
+        // Handle view buttons
+        const viewBtn = e.target.closest('.view-btn');
+        if (viewBtn) {
+            const url = viewBtn.dataset.url;
+            if (url) {
+                window.open(url, '_blank');
+            }
+            return;
+        }
+        
+        // Handle media-view elements (images/videos/audio)
+        const mediaView = e.target.closest('.media-view');
+        if (mediaView) {
+            const url = mediaView.dataset.url;
+            if (url) {
+                window.open(url, '_blank');
+            }
+            return;
+        }
+    });
+}

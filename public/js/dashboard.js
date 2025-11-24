@@ -34,7 +34,13 @@ const joinRoomError = document.getElementById('joinRoomError');
 
 // Initialize dashboard
 document.addEventListener('DOMContentLoaded', () => {
-    welcomeUser.textContent = `Welcome, ${user.username}!`;
+    console.log('Dashboard DOMContentLoaded fired');
+    console.log('User:', user);
+    console.log('Token exists:', !!token);
+    
+    if (welcomeUser) {
+        welcomeUser.textContent = `Welcome, ${user.username}!`;
+    }
     loadMyRooms();
     
     // Check if there's a room code in the URL parameters (from shared link)
@@ -42,6 +48,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const roomCode = urlParams.get('roomCode');
     
     if (roomCode) {
+        console.log('Room code from URL:', roomCode);
         // Pre-fill the room code input and automatically trigger join process
         document.getElementById('roomCode').value = roomCode.toUpperCase();
         
@@ -78,6 +85,7 @@ async function checkAndJoinRoom(roomCode) {
 
 // Logout functionality
 logoutBtn.addEventListener('click', async () => {
+    console.log('Logout button clicked');
     try {
         // Call server logout endpoint
         await fetch('/api/auth/logout', {
@@ -138,10 +146,12 @@ document.addEventListener('click', (e) => {
 
 // Create room buttons
 createInstantBtn.addEventListener('click', () => {
+    console.log('Create Instant Room button clicked');
     openModal(instantRoomModal);
 });
 
 createScheduledBtn.addEventListener('click', () => {
+    console.log('Create Scheduled Room button clicked');
     openModal(scheduledRoomModal);
     // Set minimum datetime to current time
     const now = new Date();

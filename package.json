@@ -13,13 +13,7 @@
     "build:js": "node build-scripts/compile-assets.js",
     "build:verify": "node build-scripts/verify-build.js",
     "prebuild": "npm run clean",
-    "postbuild": "npm run build:cleanup",
-    "clean": "node build-scripts/clean.js",
-    "build:cleanup": "echo \"Build completed successfully\"",
-    "build:prod": "NODE_ENV=production npm run build",
-    "heroku-postbuild": "npm run build",
-    "render-postbuild": "npm run build",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "clean": "node build-scripts/clean.js"
   },
   "keywords": [
     "chat",
@@ -39,7 +33,6 @@
     "express": "^5.1.0",
     "express-rate-limit": "^7.5.1",
     "express-session": "^1.18.2",
-    "google-dictionary-api": "^1.0.8",
     "helmet": "^7.2.0",
     "jsonwebtoken": "^9.0.2",
     "mongoose": "^8.17.2",

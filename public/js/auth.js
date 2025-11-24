@@ -45,6 +45,7 @@ function closeModal(modal) {
 if (loginBtn2) loginBtn2.addEventListener('click', () => openModal(loginModal));
 if (registerBtn) registerBtn.addEventListener('click', () => openModal(registerModal));
 if (headerLoginBtn) headerLoginBtn.addEventListener('click', () => openModal(loginModal));
+if (headerGetStartedBtn) headerGetStartedBtn.addEventListener('click', () => openModal(registerModal));
 if (footerLoginBtn) footerLoginBtn.addEventListener('click', () => openModal(loginModal));
 if (footerRegisterBtn) footerRegisterBtn.addEventListener('click', () => openModal(registerModal));
 
